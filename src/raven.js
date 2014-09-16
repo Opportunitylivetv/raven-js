@@ -12,7 +12,7 @@ var _Raven = window.Raven,
     globalKey,
     globalProject,
     globalOptions = {
-		useoffline: false,
+        useoffline: false,
         logger: 'javascript',
         ignoreErrors: [],
         ignoreUrls: [],
@@ -109,10 +109,10 @@ var Raven = {
             TraceKit.linesOfContext = globalOptions.linesOfContext;
         }
 
-		if (globalOptions.useOffline) {
-			document.addEventListener('ravenFailure', offlineHandler);
-			document.addEventListener('ravenSuccess', flushOfflineQueue);
-		}
+        if (globalOptions.useOffline) {
+            document.addEventListener('ravenFailure', offline.handler);
+            document.addEventListener('ravenSuccess', function startFlush() { offline.flushQueue(true); });
+        }
 
         TraceKit.collectWindowErrors = !!globalOptions.collectWindowErrors;
 
@@ -690,13 +690,17 @@ function makeRequest(data) {
     var img = new Image(),
         src = globalServer + authQueryString + '&sentry_data=' + encodeURIComponent(JSON.stringify(data));
 
+    data.tries = data.tries || 0;
+
     img.onload = function success() {
+        data.tries++;
         triggerEvent('success', {
             data: data,
             src: src
         });
     };
     img.onerror = img.onabort = function failure() {
+        data.tries++;
         triggerEvent('failure', {
             data: data,
             src: src
@@ -705,34 +709,65 @@ function makeRequest(data) {
     img.src = src;
 }
 
-function flushOfflineQueue(successEvent) {
-	var existingOfflineQueue = localStorage.getItem('ravenOfflineQueue');
+var offline = (function offlineQueue() {
+    var flushRunning = false;
+    function flushOfflineQueue(start) {
 
-	if (!existingOfflineQueue) {
-		return;
-	}
+        // Only start this asynchronous flush process once.
+        if (start === true) {
+            if (!flushRunning) {
+                flushRunning = true;
+            } else {
+                return;
+            }
+        }
 
-	localStorage.setItem('removeOfflineQueue', '[]');
+        var existingOfflineQueue = localStorage.getItem('ravenOfflineQueue');
 
-	var queue = JSON.parse(existingOfflineQueue);
-	queue.forEach(function(errorEvent) {
-		makeRequest(errorEvent.data);
-	});
-}
+        if (!existingOfflineQueue) {
+            flushRunning = false;
+            return;
+        }
 
-function offlineHandler(ravenFailureEvent) {
-	var existingOfflineQueue = localStorage.getItem('ravenOfflineQueue'),
-		errorData = { 'data': ravenFailureEvent.data, 'src': ravenFailureEvent.src };
+        var queue = JSON.parse(existingOfflineQueue);
 
-	if (existingOfflineQueue) {
-		var queue = JSON.parse(existingOfflineQueue);
-		queue.push(errorData);
-		localStorage.setItem('ravenOfflineQueue', JSON.stringify(queue));
-		return;
-	}
+        if (queue.length > 0) {
+            var data = queue.pop().data;
 
-	localStorage.setItem('ravenOfflineQueue', JSON.stringify([errorData]));
-}
+            // Only try and send the data twice, if it fails after this, drop the data to avoid large build ups of offline errors in localStorage. This can also be useful when rate limiting kicks in.
+            if (data.tries < 2) {
+                makeRequest(data);
+            }
+
+            // If items are still in the queue start another flush in a few
+            // seconds time, if there are a lot, this is likely to be rate
+            // limited...
+            if (queue.length > 0) {
+                setTimeout(function() {
+                    flushOfflineQueue(false);
+                }, 3000);
+            }
+        }
+
+        localStorage.setItem('ravenOfflineQueue', JSON.stringify(queue));
+    }
+
+    function offlineHandler(ravenFailureEvent) {
+        var existingOfflineQueue = localStorage.getItem('ravenOfflineQueue'),
+            errorData = { 'data': ravenFailureEvent.data, 'src': ravenFailureEvent.src };
+
+        if (existingOfflineQueue) {
+            var queue = JSON.parse(existingOfflineQueue);
+            queue.push(errorData);
+            localStorage.setItem('ravenOfflineQueue', JSON.stringify(queue));
+            return;
+        }
+
+        localStorage.setItem('ravenOfflineQueue', JSON.stringify([errorData]));
+    }
+    return { 'handler': offlineHandler, 'flushQueue': flushOfflineQueue };
+}());
+
 
 function isSetup() {
     if (!hasJSON) return false;  // needs JSON support
