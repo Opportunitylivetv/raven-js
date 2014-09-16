@@ -12,6 +12,7 @@ var _Raven = window.Raven,
     globalKey,
     globalProject,
     globalOptions = {
+		useoffline: false,
         logger: 'javascript',
         ignoreErrors: [],
         ignoreUrls: [],
@@ -107,6 +108,11 @@ var Raven = {
         if (globalOptions.linesOfContext) {
             TraceKit.linesOfContext = globalOptions.linesOfContext;
         }
+
+		if (globalOptions.useOffline) {
+			document.addEventListener('ravenFailure', offlineHandler);
+			document.addEventListener('ravenSuccess', flushOfflineQueue);
+		}
 
         TraceKit.collectWindowErrors = !!globalOptions.collectWindowErrors;
 
@@ -680,7 +686,6 @@ function send(data) {
     makeRequest(data);
 }
 
-
 function makeRequest(data) {
     var img = new Image(),
         src = globalServer + authQueryString + '&sentry_data=' + encodeURIComponent(JSON.stringify(data));
@@ -698,6 +703,35 @@ function makeRequest(data) {
         });
     };
     img.src = src;
+}
+
+function flushOfflineQueue(successEvent) {
+	var existingOfflineQueue = localStorage.getItem('ravenOfflineQueue');
+
+	if (!existingOfflineQueue) {
+		return;
+	}
+
+	localStorage.setItem('removeOfflineQueue', '[]');
+
+	var queue = JSON.parse(existingOfflineQueue);
+	queue.forEach(function(errorEvent) {
+		makeRequest(errorEvent.data);
+	});
+}
+
+function offlineHandler(ravenFailureEvent) {
+	var existingOfflineQueue = localStorage.getItem('ravenOfflineQueue'),
+		errorData = { 'data': ravenFailureEvent.data, 'src': ravenFailureEvent.src };
+
+	if (existingOfflineQueue) {
+		var queue = JSON.parse(existingOfflineQueue);
+		queue.push(errorData);
+		localStorage.setItem('ravenOfflineQueue', JSON.stringify(queue));
+		return;
+	}
+
+	localStorage.setItem('ravenOfflineQueue', JSON.stringify([errorData]));
 }
 
 function isSetup() {

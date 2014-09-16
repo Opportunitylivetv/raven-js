@@ -12,10 +12,12 @@
 //cool
 //really cool
 //awesome
-Raven.config('http://50dbe04cd1224d439e9c49bf1d0464df@localhost:8000/1').install();
+Raven.config('https://957881055af44d01a987fdec623138a4@app.getsentry.com/30103', {
+	useOffline: true
+}).install();
 
 Raven.setUserContext({
-    email: 'matt@ydekproductions.com',
+    email: 'sam@labs.ft.com',
     id: 5
 })
 
